@@ -1,5 +1,6 @@
 package com.thelightphone.sample
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -24,7 +25,10 @@ import com.thelightphone.sdk.LightViewModel
 import com.thelightphone.sdk.SealedLightActivity
 import com.thelightphone.sdk.SimpleLightScreen
 import com.thelightphone.sdk.callRemoteServiceMethod
+import com.thelightphone.sdk.shared.LightResult
 import com.thelightphone.sdk.shared.LightServiceMethod
+import com.thelightphone.sdk.shared.error
+import com.thelightphone.sdk.shared.getOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -44,11 +48,14 @@ class HomeScreenViewModel(
         val uri = fileShare.getUri("ringtones/$filename").toString()
         viewModelScope.launch {
             status.value = "Setting ringtone..."
-            callRemoteServiceMethod(
+            val result = callRemoteServiceMethod(
                 LightServiceMethod.SetRingtone,
                 LightServiceMethod.SetRingtone.Request(type = 1, uri = uri)
             )
-            status.value = "Ringtone set: $filename"
+            status.value = result.error?.let {
+                Log.e("HomeScreen", "Unable to set ringtone, error code: ${it.code}")
+                "Unable to set ringtone!"
+            } ?: "Ringtone set: $filename"
         }
     }
 }

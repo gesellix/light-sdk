@@ -8,6 +8,7 @@ import android.os.IBinder
 import android.os.Parcel
 import android.util.Log
 import com.thelightphone.sdk.shared.LightConstants
+import com.thelightphone.sdk.shared.LightResult
 import com.thelightphone.sdk.shared.LightServiceMethod
 import kotlinx.coroutines.CompletableDeferred
 
@@ -39,8 +40,8 @@ internal object LightServiceConnection : ServiceConnection {
         serviceBinder = null
     }
 
-    fun request(method: String, data: String): String? {
-        val binder = serviceBinder ?: return null
+    fun request(method: String, data: String): LightResult<String> {
+        val binder = serviceBinder ?: return LightResult.Error(LightResult.ErrorCode.Unknown, "not connected")
         val parcel = Parcel.obtain()
         val reply = Parcel.obtain()
         return try {
@@ -49,10 +50,17 @@ internal object LightServiceConnection : ServiceConnection {
             parcel.writeString(data)
             binder.transact(LightConstants.TRANSACTION_REQUEST, parcel, reply, 0)
             reply.readException()
-            reply.readString()
+            val errorOrdinal = reply.readInt()
+            if (errorOrdinal == -1) {
+                LightResult.Success(reply.readString() ?: "")
+            } else {
+                val extra = reply.readString()
+                val errorCode = LightResult.ErrorCode.entries.getOrElse(errorOrdinal) { LightResult.ErrorCode.Unknown }
+                LightResult.Error(errorCode, extra)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "request failed: method=$method", e)
-            null
+            LightResult.Error(LightResult.ErrorCode.Unknown, e.message)
         } finally {
             parcel.recycle()
             reply.recycle()
@@ -79,8 +87,10 @@ internal object LightServiceConnection : ServiceConnection {
 suspend fun <TRequest, TResponse> callRemoteServiceMethod(
     method: LightServiceMethod<TRequest, TResponse>,
     body: TRequest,
-): TResponse? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+): LightResult<TResponse> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
     LightServiceConnection.awaitBinder()
-    val responseJson = LightServiceConnection.request(method.id, method.encodeRequest(body)) ?: return@withContext null
-    method.decodeResponse(responseJson)
+    when (val result = LightServiceConnection.request(method.id, method.encodeRequest(body))) {
+        is LightResult.Success -> LightResult.Success(method.decodeResponse(result.data))
+        is LightResult.Error -> result
+    }
 }

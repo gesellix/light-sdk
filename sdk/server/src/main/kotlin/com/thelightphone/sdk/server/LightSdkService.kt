@@ -1,7 +1,6 @@
 package com.thelightphone.sdk.server
 
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
@@ -10,6 +9,7 @@ import android.os.IBinder
 import android.os.Parcel
 import android.util.Log
 import com.thelightphone.sdk.shared.LightConstants
+import com.thelightphone.sdk.shared.LightResult
 import com.thelightphone.sdk.shared.LightServiceMethod
 import com.thelightphone.sdk.shared.allMethods
 
@@ -26,43 +26,62 @@ class LightSdkService : Service() {
                     data.enforceInterface(LightConstants.ACTION_BIND_SDK_SERVICE)
                     val methodId = data.readString()
                     val payload = data.readString()
-                    val response = if (methodId != null) {
-                        handleRequest(methodId, payload)
-                    } else ""
+                    val result = if (methodId != null) {
+                        runCatching { handleRequest(methodId, payload) }
+                            .getOrElse {
+                                Log.e(TAG, "Error handling request: $methodId", it)
+                                LightResult.Error(LightResult.ErrorCode.Unknown)
+                            }
+                    } else LightResult.Error(
+                        LightResult.ErrorCode.InvalidParameters,
+                        "missing method id"
+                    )
                     reply?.writeNoException()
-                    reply?.writeString(response)
+                    when (result) {
+                        is LightResult.Success -> {
+                            reply?.writeInt(-1) // success sentinel
+                            reply?.writeString(result.data)
+                        }
+
+                        is LightResult.Error -> {
+                            reply?.writeInt(result.code.ordinal)
+                            reply?.writeString(result.extra)
+                        }
+                    }
                     true
                 }
+
                 else -> super.onTransact(code, data, reply, flags)
             }
         }
     }
 
-    private fun handleRequest(methodId: String, payload: String?): String? {
-        return when (val method = allMethods[methodId]) {
+    private fun handleRequest(methodId: String, payload: String?): LightResult<String> {
+        return when (allMethods[methodId]) {
             LightServiceMethod.GetVersion -> {
-                LightServiceMethod.GetVersion.encodeResponse(
-                    LightServiceMethod.GetVersion.Response(version = BuildConfig.SDK_VERSION)
+                LightResult.Success(
+                    LightServiceMethod.GetVersion.encodeResponse(
+                        LightServiceMethod.GetVersion.Response(version = BuildConfig.SDK_VERSION)
+                    )
                 )
             }
+
             LightServiceMethod.SetRingtone -> {
                 val request = LightServiceMethod.SetRingtone.decodeRequest(payload!!)
-                setActualDefaultRingtoneUri(request.type, request.uri)
-                LightServiceMethod.SetRingtone.encodeResponse(Unit)
+                RingtoneManager.setActualDefaultRingtoneUri(
+                    this,
+                    request.type,
+                    Uri.parse(request.uri)
+                )
+                LightResult.Success(LightServiceMethod.SetRingtone.encodeResponse(Unit))
             }
+
             null -> {
-                Log.e(TAG, "Service method $method not found!")
-                ""
+                Log.e(TAG, "Service method $methodId not found!")
+                LightResult.Error(LightResult.ErrorCode.Unknown, "unknown method: $methodId")
             }
-
-
         }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
-}
-
-fun Context.setActualDefaultRingtoneUri(type: Int, uri: String) {
-    println("setting ringtone: $type $uri")
-    RingtoneManager.setActualDefaultRingtoneUri(this, type, Uri.parse(uri))
 }
